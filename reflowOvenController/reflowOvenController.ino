@@ -213,6 +213,7 @@ reflowStatus_t reflowStatus;
 // Switch debounce state machine state variable
 
 button_t buttonStatus;
+button_t b_temp;
 // Seconds timer
 int timerSeconds;
 
@@ -276,7 +277,6 @@ void setup()
     nextCheck = millis();
     // Initialize thermocouple reading variable
     nextRead = millis();
-    
     
 }
 
@@ -441,27 +441,24 @@ void loop()
             // If minimum cool temperature is achieve       
             if (input <= TEMPERATURE_COOL_MIN)
             {
-              // Retrieve current time for buzzer usage
-              buzzerPeriod = millis() + 1000;
-              // Turn on buzzer and green LED to indicate completion
-              digitalWrite(buzzerPin, HIGH);
-              // Turn off reflow process
-              reflowStatus = REFLOW_STATUS_OFF;                
-              // Proceed to reflow Completion state
-              reflowState = REFLOW_STATE_COMPLETE; 
+                // Retrieve current time for buzzer usage
+                buzzerPeriod = millis() + 1000;
+                // Turn on buzzer and green LED to indicate completion
+                digitalWrite(buzzerPin, HIGH);
+                // Turn off reflow process
+                reflowStatus = REFLOW_STATUS_OFF;                
+                // Proceed to reflow Completion state
+                reflowState = REFLOW_STATE_COMPLETE; 
             }         
             break;    
 
         case REFLOW_STATE_COMPLETE:
             if (millis() > buzzerPeriod)
             {
-              // Turn off buzzer and green LED
-              digitalWrite(buzzerPin, LOW);
-        			#ifdef	USE_MAX6675
-        				digitalWrite(ledGreenPin, HIGH);
-        			#endif
-        			// Reflow process ended
-              reflowState = REFLOW_STATE_IDLE; 
+                // Turn off buzzer and green LED
+                digitalWrite(buzzerPin, LOW);
+                // Reflow process ended
+                reflowState = REFLOW_STATE_IDLE; 
             }
             break;
       	
@@ -502,12 +499,42 @@ void loop()
             reflowState = REFLOW_STATE_IDLE;
         }
     } 
-
-    // Simple switch debounce state machine (for switch #1 (both analog & digital
-    // switch supported))
    
-    buttonStatus = ReadButtons();
-   
+    b_temp = ReadButtons();
+    if (buttonJustPressed || buttonJustReleased )
+    {
+        buttonStatus = b_temp;
+        if( buttonJustPressed )
+            buttonJustPressed = false;
+        if( buttonJustReleased )
+            buttonJustReleased = false;
+    }
+    
+    
+    /*
+    //Used to debug button
+    switch (buttonStatus)
+    {
+        case BUTTON_NONE:
+            Serial.println("Button none.");
+            break;
+        case BUTTON_UP:
+            Serial.println("Button up.");
+            break;
+        case BUTTON_DOWN:
+            Serial.println("Button down.");
+            break;
+        case BUTTON_LEFT:
+            Serial.println("Button left.");
+            break;
+        case BUTTON_RIGHT:
+            Serial.println("Button right.");
+            break;
+        case BUTTON_SELECT:
+            Serial.println("Button select.");
+            break;
+    }
+    */
     // PID computation and SSR control
     if (reflowStatus == REFLOW_STATUS_ON)
     {
