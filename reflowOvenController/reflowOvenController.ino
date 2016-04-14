@@ -1,7 +1,3 @@
-
-
-#include <SPI.h>
-
 /*******************************************************************************
 * Title: Reflow Oven Controller
 * Version: 1.20
@@ -84,31 +80,24 @@
 *
 * Revision  Description
 * ========  ===========
-* 1.20			Adds supports for v1.60 (and above) of Reflow Oven Controller 
+* 1.3       Moved to freetronics LCD module and Adafruit MAX31855 module.
+*
+* 1.20      Adds supports for v1.60 (and above) of Reflow Oven Controller 
 *           Shield:
-*					  - Uses MAX31855KASA+ chip and pin reassign (allowing A4 & A5 (I2C)
-*             to be used for user application).
-*					  - Uses analog based switch (allowing D2 & D3 to be used for user 
-*						  application).	
-*						Adds waiting state when temperature too hot to start reflow process.
-*						Corrected thermocouple disconnect error interpretation (MAX6675).
+*             - Uses MAX31855KASA+ chip and pin reassign (allowing A4 & A5 (I2C)
+*               to be used for user application).
+*             - Uses analog based switch (allowing D2 & D3 to be used for user 
+*               application).	
+*           Adds waiting state when temperature too hot to start reflow process.
+*           Corrected thermocouple disconnect error interpretation (MAX6675).
 * 1.10      Arduino IDE 1.0 compatible.
 * 1.00      Initial public release.
 *******************************************************************************/
-// Comment either one the following #define to select your board revision
-// Newer board version starts from v1.60 using MAX31855KASA+ chip 
-#define  USE_MAX31855
-// Older board version below version v1.60 using MAX6675ISA+ chip
-//#define USE_MAX6675
-
-// ***** INCLUDES *****
-#include <LiquidCrystal.h>
-#ifdef	USE_MAX31855
-    #include <Adafruit_MAX31855.h>
-#else
-    #include <max6675.h>
-#endif
+#include <SPI.h>
+#include <Adafruit_MAX31855.h>
 #include <PID_v1.h>
+#include <LiquidCrystal.h>
+#include "ButtonType.h"
 
 // ***** TYPE DEFINITIONS *****
 typedef enum REFLOW_STATE
@@ -129,19 +118,21 @@ typedef enum REFLOW_STATUS
     REFLOW_STATUS_ON
 } reflowStatus_t;
 
-typedef	enum SWITCH
-{
-  SWITCH_NONE,
-  SWITCH_1,	
-  SWITCH_2
-} switch_t;
 
-typedef enum DEBOUNCE_STATE
-{
-    DEBOUNCE_STATE_IDLE,
-    DEBOUNCE_STATE_CHECK,
-    DEBOUNCE_STATE_RELEASE
-} debounceState_t;
+#define BUTTON_ADC_PIN           A0  // A0 is the button ADC input
+#define LCD_BACKLIGHT_PIN         3  // D3 controls LCD backlight
+// ADC readings expected for the 5 buttons on the ADC input
+#define RIGHT_10BIT_ADC           0  // right
+#define UP_10BIT_ADC            145  // up
+#define DOWN_10BIT_ADC          329  // down
+#define LEFT_10BIT_ADC          505  // left
+#define SELECT_10BIT_ADC        741  // right
+#define BUTTONHYSTERESIS         10  // hysteresis for valid button sensing window
+//some example macros with friendly labels for LCD backlight/pin control, tested and can be swapped into the example code as you like
+#define LCD_BACKLIGHT_OFF()     digitalWrite( LCD_BACKLIGHT_PIN, LOW )
+#define LCD_BACKLIGHT_ON()      digitalWrite( LCD_BACKLIGHT_PIN, HIGH )
+#define LCD_BACKLIGHT(state)    { if( state ){digitalWrite( LCD_BACKLIGHT_PIN, HIGH );}else{digitalWrite( LCD_BACKLIGHT_PIN, LOW );} }
+
 
 // ***** CONSTANTS *****
 #define TEMPERATURE_ROOM 50
@@ -186,37 +177,21 @@ unsigned char degree[8]  = {
   140,146,146,140,128,128,128,128};
 
 // ***** PIN ASSIGNMENT *****
-#ifdef	USE_MAX31855
-    int ssrPin = A1;
-    int thermocoupleSOPin = 10;
-    int thermocoupleCSPin = 11;
-    int thermocoupleCLKPin = 12;
-    int lcdRsPin = 8;
-    int lcdEPin = 9;
-    int lcdD4Pin = 4;
-    int lcdD5Pin = 5;
-    int lcdD6Pin = 6;
-    int lcdD7Pin = 7;
-    int ledRedPin = 13;
-    int buzzerPin = 14;
-    int switchPin = A0;
-#else
-    int ssrPin = 5;
-    int thermocoupleSOPin = A5;
-    int thermocoupleCSPin = A4;
-    int thermocoupleCLKPin = A3;
-    int lcdRsPin = 7;
-    int lcdEPin = 8;
-    int lcdD4Pin = 9;
-    int lcdD5Pin = 10;
-    int lcdD6Pin = 11;
-    int lcdD7Pin = 12;
-    int ledRedPin = A1;
-    int ledGreenPin = A0;
-    int buzzerPin = 6;
-    int switch1Pin = 2;
-    int switch2Pin = 3;
-#endif
+
+int ssrPin = A1;
+int thermocoupleSOPin = 10;
+int thermocoupleCSPin = 11;
+int thermocoupleCLKPin = 12;
+int lcdRsPin = 8;
+int lcdEPin = 9;
+int lcdD4Pin = 4;
+int lcdD5Pin = 5;
+int lcdD6Pin = 6;
+int lcdD7Pin = 7;
+int ledRedPin = 13;
+int buzzerPin = 14;
+int switchPin = A0;
+
 
 // ***** PID CONTROL VARIABLES *****
 double setpoint;
@@ -236,24 +211,24 @@ reflowState_t reflowState;
 // Reflow oven controller status
 reflowStatus_t reflowStatus;
 // Switch debounce state machine state variable
-debounceState_t debounceState;
-// Switch debounce timer
-long lastDebounceTime;
-// Switch press status
-switch_t switchStatus;
+
+button_t buttonStatus;
 // Seconds timer
 int timerSeconds;
+
+
+byte buttonJustPressed  = false;         //this will be true after a ReadButtons() call if triggered
+byte buttonJustReleased = false;         //this will be true after a ReadButtons() call if triggered
+button_t buttonWas      = BUTTON_NONE;   //used by ReadButtons() for detection of button events
+
 
 // Specify PID control interface
 PID reflowOvenPID(&input, &output, &setpoint, kp, ki, kd, DIRECT);
 // Specify LCD interface
 LiquidCrystal lcd(lcdRsPin, lcdEPin, lcdD4Pin, lcdD5Pin, lcdD6Pin, lcdD7Pin);
-// Specify MAX6675 thermocouple interface
-#ifdef	USE_MAX31855
-    Adafruit_MAX31855 thermocouple(thermocoupleCLKPin, thermocoupleCSPin, thermocoupleSOPin );
-#else
-    MAX6675 thermocouple(thermocoupleCLKPin, thermocoupleCSPin, thermocoupleSOPin);
-#endif
+
+Adafruit_MAX31855 thermocouple(thermocoupleCLKPin, thermocoupleCSPin, thermocoupleSOPin );
+
 
 void setup()
 {
@@ -268,15 +243,15 @@ void setup()
     // LED pins initialization and turn on upon start-up (active low)
     digitalWrite(ledRedPin, LOW);
     pinMode(ledRedPin, OUTPUT);
-#ifdef USE_MAX6675
-    // LED pins initialization and turn on upon start-up (active low)
-    digitalWrite(ledGreenPin, LOW);	
-    pinMode(ledGreenPin, OUTPUT);
-    // Switch pins initialization
-    pinMode(switch1Pin, INPUT);
-    pinMode(switch2Pin, INPUT);
-#endif	
 
+    //button adc input
+    pinMode( BUTTON_ADC_PIN, INPUT );         //ensure A0 is an input
+    digitalWrite( BUTTON_ADC_PIN, LOW );      //ensure pullup is off on A0
+    //lcd backlight control
+    digitalWrite( LCD_BACKLIGHT_PIN, HIGH );  //backlight control pin D3 is high (on)
+    pinMode( LCD_BACKLIGHT_PIN, OUTPUT );     //D3 is an output
+
+    
     // Start-up splash
     digitalWrite(buzzerPin, HIGH);
     lcd.begin(8, 2);
@@ -294,33 +269,30 @@ void setup()
 
     // Turn off LED (active low)
     digitalWrite(ledRedPin, HIGH);
-#ifdef  USE_MAX6675
-    digitalWrite(ledGreenPin, HIGH);
-#endif
+
     // Set window size
     windowSize = 2000;
     // Initialize time keeping variable
     nextCheck = millis();
     // Initialize thermocouple reading variable
     nextRead = millis();
+    
+    
 }
 
 void loop()
 {
+    
     // Current time
     unsigned long now;
-
+    
     // Time to read thermocouple?
     if (millis() > nextRead)
     {
         // Read thermocouple next sampling period
         nextRead += SENSOR_SAMPLING_TIME;
         // Read current temperature
-#ifdef	USE_MAX31855
-	input = thermocouple.readCelsius();
-#else
         input = thermocouple.readCelsius();
-#endif
 	if (isnan(input))
 	{
             // Illegal operation
@@ -395,7 +367,7 @@ void loop()
             else
             {
                 // If switch is pressed to start reflow process
-                if (switchStatus == SWITCH_1)
+                if (buttonStatus == BUTTON_SELECT)
                 {
                     // Send header for CSV file
                     Serial.println("Time Setpoint Input Output");
@@ -472,10 +444,7 @@ void loop()
               // Retrieve current time for buzzer usage
               buzzerPeriod = millis() + 1000;
               // Turn on buzzer and green LED to indicate completion
-        			#ifdef	USE_MAX6675
-        				digitalWrite(ledGreenPin, LOW);
-              #endif
-        			digitalWrite(buzzerPin, HIGH);
+              digitalWrite(buzzerPin, HIGH);
               // Turn off reflow process
               reflowStatus = REFLOW_STATUS_OFF;                
               // Proceed to reflow Completion state
@@ -520,8 +489,8 @@ void loop()
             break;    
     }    
 
-    // If switch 1 is pressed
-    if (switchStatus == SWITCH_1)
+    // If switch select is pressed
+    if (buttonStatus == BUTTON_SELECT)
     {
         // If currently reflow process is on going
         if (reflowStatus == REFLOW_STATUS_ON)
@@ -536,63 +505,9 @@ void loop()
 
     // Simple switch debounce state machine (for switch #1 (both analog & digital
     // switch supported))
-    switch (debounceState)
-    {
-        case DEBOUNCE_STATE_IDLE:
-            // No valid switch press
-            switchStatus = SWITCH_NONE;
-            // If switch #1 is pressed
-#ifdef	USE_MAX6675
-            if (digitalRead(switch1Pin) == LOW)
-#else
-            if (analogRead(switchPin) == 0)
-#endif
-            {
-                // Intialize debounce counter
-                lastDebounceTime = millis();
-                // Proceed to check validity of button press
-                debounceState = DEBOUNCE_STATE_CHECK;
-            }	
-            break;
-
-        case DEBOUNCE_STATE_CHECK:
-#ifdef	USE_MAX6675
-            // If switch #1 is still pressed
-            if (digitalRead(switch1Pin) == LOW)
-#else
-            if (analogRead(switchPin) == 0)
-#endif
-            {
-                // If minimum debounce period is completed
-                if ((millis() - lastDebounceTime) > DEBOUNCE_PERIOD_MIN)
-                {
-                    // Proceed to wait for button release
-                    debounceState = DEBOUNCE_STATE_RELEASE;
-                }
-            }
-            // False trigger
-            else
-            {
-                // Reinitialize button debounce state machine
-                debounceState = DEBOUNCE_STATE_IDLE; 
-            }
-            break;
-
-        case DEBOUNCE_STATE_RELEASE:
-#ifdef	USE_MAX6675	
-            if (digitalRead(switch1Pin) == HIGH)
-#else
-            if (analogRead(switchPin) > 0)
-#endif
-            {
-                // Valid switch 1 press
-                switchStatus = SWITCH_1;
-                // Reinitialize button debounce state machine
-                debounceState = DEBOUNCE_STATE_IDLE; 
-            }
-            break;
-        }
-
+   
+    buttonStatus = ReadButtons();
+   
     // PID computation and SSR control
     if (reflowStatus == REFLOW_STATUS_ON)
     {
@@ -615,4 +530,61 @@ void loop()
     {
         digitalWrite(ssrPin, LOW);
     }
+}
+
+/*--------------------------------------------------------------------------------------
+  ReadButtons()
+  Detect the button pressed and return the value
+  Uses global values buttonWas, buttonJustPressed, buttonJustReleased.
+--------------------------------------------------------------------------------------*/
+button_t ReadButtons()
+{
+   unsigned int buttonVoltage;
+   button_t button = BUTTON_NONE;   // return no button pressed if the below checks don't write to btn
+   
+   //read the button ADC pin voltage
+   buttonVoltage = analogRead( BUTTON_ADC_PIN );
+   //sense if the voltage falls within valid voltage windows
+   if( buttonVoltage < ( RIGHT_10BIT_ADC + BUTTONHYSTERESIS ) )
+   {
+      button = BUTTON_RIGHT;
+   }
+   else if(   buttonVoltage >= ( UP_10BIT_ADC - BUTTONHYSTERESIS )
+           && buttonVoltage <= ( UP_10BIT_ADC + BUTTONHYSTERESIS ) )
+   {
+      button = BUTTON_UP;
+   }
+   else if(   buttonVoltage >= ( DOWN_10BIT_ADC - BUTTONHYSTERESIS )
+           && buttonVoltage <= ( DOWN_10BIT_ADC + BUTTONHYSTERESIS ) )
+   {
+      button = BUTTON_DOWN;
+   }
+   else if(   buttonVoltage >= ( LEFT_10BIT_ADC - BUTTONHYSTERESIS )
+           && buttonVoltage <= ( LEFT_10BIT_ADC + BUTTONHYSTERESIS ) )
+   {
+      button = BUTTON_LEFT;
+   }
+   else if(   buttonVoltage >= ( SELECT_10BIT_ADC - BUTTONHYSTERESIS )
+           && buttonVoltage <= ( SELECT_10BIT_ADC + BUTTONHYSTERESIS ) )
+   {
+      button = BUTTON_SELECT;
+   }
+   //handle button flags for just pressed and just released events
+   if( ( buttonWas == BUTTON_NONE ) && ( button != BUTTON_NONE ) )
+   {
+      //the button was just pressed, set buttonJustPressed, this can optionally be used to trigger a once-off action for a button press event
+      //it's the duty of the receiver to clear these flags if it wants to detect a new button change event
+      buttonJustPressed  = true;
+      buttonJustReleased = false;
+   }
+   if( ( buttonWas != BUTTON_NONE ) && ( button == BUTTON_NONE ) )
+   {
+      buttonJustPressed  = false;
+      buttonJustReleased = true;
+   }
+   
+   //save the latest button value, for change event detection next time round
+   buttonWas = button;
+   
+   return( button );
 }

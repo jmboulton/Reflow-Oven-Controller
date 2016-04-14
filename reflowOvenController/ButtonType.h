@@ -1,0 +1,11 @@
+
+typedef	enum BUTTON
+{
+  BUTTON_NONE,
+  BUTTON_UP,
+  BUTTON_DOWN,
+  BUTTON_LEFT,
+  BUTTON_RIGHT,
+  BUTTON_SELECT
+} button_t;
+
