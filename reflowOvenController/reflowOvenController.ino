@@ -1,5 +1,25 @@
 /*******************************************************************************
 * Title: Reflow Oven Controller
+* Version: 1.0
+* Date: 15-04-2016
+* Company: Veritide Ltd
+* Author: James Boulton
+*
+* Tested on an Arduino Pro 16MHz 5Volt.
+* 
+* Uses a Freetronics LCD & Keyboard shield:
+* http://www.freetronics.com.au/products/lcd-keypad-shield#.Vw7JrCaupuI
+* 
+* And a thermocouple amplifier MAX31855 Breakout Board from Adafruit:
+* https://www.adafruit.com/products/269
+* Data out    = pin 10;
+* Chip select = pin 11;
+* Clock       = pin 12;
+*
+* The SSR is connected to pin A1
+* The buzzer is connected to pin 14 via an open collector transistor.
+* 
+* Modified version from:
 * Version: 1.20
 * Date: 26-11-2012
 * Company: Rocket Scream Electronics
